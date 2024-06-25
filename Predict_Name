@@ -5,40 +5,12 @@ from sklearn.linear_model import RidgeClassifier
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import accuracy_score
 
-df = pandas.read_csv("nba_games.csv", index_col=0)
-df = df.sort_values("date")
-df = df.reset_index(drop=True)
-
-
-del df["mp.1"]
-del df["mp_opp.1"]
-del df["index_opp"]
-
-def target_add(team):
-    team["target"] = team["won"].shift(-1) #Checks whether the team wi the next game
-    return team
-
-df = df.groupby("team", group_keys=False).apply(target_add)
-
-df["target"][pandas.isnull(df["target"])] = 2 #Some values in thee "target" is null as teams play the fianl game in the season so we find these final matches and change the values of the "target" values to 2
-df["target"] = df["target"].astype(int, errors="ignore")
-nulls = pandas.isnull(df)
-nulls = nulls.sum()
-nulls = nulls[nulls > 0]
-valid_cols = df.columns[~df.columns.isin(nulls.index)]
-df = df[valid_cols].copy()
-
 rr = RidgeClassifier(alpha=1)
 split = TimeSeriesSplit(n_splits=3)
 sfs = SequentialFeatureSelector(rr, n_features_to_select=30, direction="forward", cv=split)
 scaler = MinMaxScaler()
 
-removed_cols = ["season", "date", "won", "target", "team", "team_opp"]
-selected_cols = df.columns[~df.columns.isin(removed_cols)]
-df[selected_cols] = scaler.fit_transform(df[selected_cols])
-
-sfs.fit(df[selected_cols], df["target"])#Picking best features for predicting "target" out of 30 as we chose above
-predictors = list(selected_cols[sfs.get_support()])
+############################################################################
 
 def back_test(data, model, predictors, start=1, step=1): #2 start
     all_predicts = []
@@ -59,41 +31,114 @@ def back_test(data, model, predictors, start=1, step=1): #2 start
         
         all_predicts.append(combined)
     return pandas.concat(all_predicts)
-    
-predictions = back_test(df, rr, predictors)
 
-predictions = predictions[predictions["actual"] != 2]# Exlusion of the values "2"
-acc = accuracy_score(predictions["actual"], predictions["prediction"])
-
-a = df.groupby("home").apply(lambda x: x[x["won"] == 1].shape[0] / x.shape[0])
-
-df_roll = df[list(selected_cols) + ["won", "team", "season"]]
+def target_add(team):
+    team["target"] = team["won"].shift(-1) #Checks whether the team wi the next game
+    return team
 
 def find_averages(team):
-    rolling = team.rolling(5).mean() #Finding the average performance of the team by looking its previous "5" matches
+    numeric_cols = team.select_dtypes(include=[float, int]).columns
+    rolling = team[numeric_cols].rolling(5).mean() #Finding the average performance of the team by looking its previous "5" matches
     return rolling
-
-df_roll = df_roll.groupby(["team", "season"], group_keys=False).apply(find_averages)
-
-rolling_cols = [f"{col}_10" for col in df_roll.columns]
-df_roll.columns = rolling_cols
-
-df = pandas.concat([df, df_roll], axis=1)
-df = df.dropna()
 
 def shift_col(team, col_name):
     next_col = team[col_name].shift(-1)
     return next_col
     
-
-def add_col(team, col_name):
+def add_col(df, col_name):
     return df.groupby("team", group_keys=False).apply(lambda x: shift_col(x, col_name))
+
+############################################################################
+
+df = pandas.read_csv("nba_games.csv", index_col=0)
+df = df.sort_values("date")
+df = df.reset_index(drop=True)
+
+del df["mp.1"]
+del df["mp_opp.1"]
+del df["index_opp"]
+
+df = df.groupby("team", group_keys=False).apply(target_add)
+df["target"][pandas.isnull(df["target"])] = 2 #Some values in thee "target" is null as teams play the fianl game in the season so we find these final matches and change the values of the "target" values to 2
+df["target"] = df["target"].astype(int, errors="ignore")
+
+future_games = df[df["target"] == 2]
+df = df[df["target"] != 2]
+
+nulls = pandas.isnull(df)
+nulls = nulls.sum()
+nulls = nulls[nulls > 0]
+valid_cols = df.columns[~df.columns.isin(nulls.index)]
+df = df[valid_cols].copy()
+
+removed_cols = ["season", "date", "won", "target", "team", "team_opp"]
+selected_cols = df.columns[~df.columns.isin(removed_cols)]
+
+df_roll = df[list(selected_cols) + ["won", "team", "season"]]
+df_roll = df_roll.groupby(["team", "season"], group_keys=False).apply(find_averages)
+
+rolling_cols = [f"{col}_5" for col in df_roll.columns]
+df_roll.columns = rolling_cols
+
+df = pandas.concat([df, df_roll], axis=1)
+df = df.dropna()
 
 df["home_next"] = add_col(df, "home")
 df["team_opp_next"] = add_col(df, "team_opp")
 df["date_next"] = add_col(df, "date")
 
-df = df.copy()
-print(df)
+full_df = df.merge(df[rolling_cols + ["team_opp_next", "date_next", "team"]], left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
+
+removed_cols = list(full_df.columns[full_df.dtypes == "object"]) + removed_cols
+selected_cols = full_df.columns[~full_df.columns.isin(removed_cols)]
+
+sfs.fit(full_df[selected_cols], full_df["target"])
+predictors = list(selected_cols[sfs.get_support()])
+
+predictions = back_test(full_df, rr, predictors)
+predictions = predictions[predictions["actual"] != 2]
+
+        #acc = accuracy_score(predictions["actual"], predictions["prediction"])
+
+###############################################
+            #### FUTURE GAMES ####
+
+future_games_roll = future_games.groupby(["team", "season"], group_keys=False).apply(find_averages)
+future_games_full_df = pandas.concat([future_games, future_games_roll], axis=1).dropna()
+
+print(future_games_full_df.columns)
+
+future_games["home_next"] = add_col(future_games, "home")
+future_games["team_opp_next"] = add_col(future_games, "team_opp")
+future_games["date_next"] = add_col(future_games, "date")
+
+future_games_full_df = future_games.merge(df[rolling_cols + ["team_opp_next", "date_next", "team"]],
+                                      left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
+
+############3
+future_games_full_df[selected_cols] = scaler.transform(future_games_full_df[selected_cols])
+
+future_games_full_df_roll = future_games_full_df[list(selected_cols) + ["won", "team", "season"]]
+future_games_full_df_roll = future_games_full_df_roll.groupby(["team", "season"], group_keys=False).apply(find_averages)
+future_games_full_df_roll.columns = rolling_cols
+
+future_games_full_df = pandas.concat([future_games_full_df, future_games_full_df_roll], axis=1)
+future_games_full_df = future_games_full_df.dropna()
+
+###########3
+
+
+future_preds = rr.predict(future_games_full_df[predictors])
+future_games_full_df["prediction"] = future_preds
+
+print(future_games_full_df[["team", "team_opp_next", "date", "prediction"]])
+
+
+
+
+
+
+
+
     
     
