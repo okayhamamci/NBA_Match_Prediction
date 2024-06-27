@@ -74,6 +74,9 @@ df = df[valid_cols].copy()
 removed_cols = ["season", "date", "won", "target", "team", "team_opp"]
 selected_cols = df.columns[~df.columns.isin(removed_cols)]
 
+future_games_roll = future_games[list(selected_cols) + ["team", "season"]]
+future_games_roll = future_games_roll.groupby(["team", "season"], group_keys=False).apply(find_averages)
+
 df_roll = df[list(selected_cols) + ["won", "team", "season"]]
 df_roll = df_roll.groupby(["team", "season"], group_keys=False).apply(find_averages)
 
@@ -103,35 +106,27 @@ predictions = predictions[predictions["actual"] != 2]
 ###############################################
             #### FUTURE GAMES ####
 
-future_games_roll = future_games.groupby(["team", "season"], group_keys=False).apply(find_averages)
-future_games_full_df = pandas.concat([future_games, future_games_roll], axis=1).dropna()
+future_games = pandas.concat([future_games, future_games_roll], axis=1)
+future_games = future_games.dropna()
 
-print(future_games_full_df.columns)
-
+print("ADD_COL ÖNCESİ")
 future_games["home_next"] = add_col(future_games, "home")
+print("home sonrası")
 future_games["team_opp_next"] = add_col(future_games, "team_opp")
+print("teamoppnext sonrası")
 future_games["date_next"] = add_col(future_games, "date")
 
-future_games_full_df = future_games.merge(df[rolling_cols + ["team_opp_next", "date_next", "team"]],
-                                      left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
+print("MERGE ÖNCESİİİİ")
 
-############3
-future_games_full_df[selected_cols] = scaler.transform(future_games_full_df[selected_cols])
-
-future_games_full_df_roll = future_games_full_df[list(selected_cols) + ["won", "team", "season"]]
-future_games_full_df_roll = future_games_full_df_roll.groupby(["team", "season"], group_keys=False).apply(find_averages)
-future_games_full_df_roll.columns = rolling_cols
-
-future_games_full_df = pandas.concat([future_games_full_df, future_games_full_df_roll], axis=1)
-future_games_full_df = future_games_full_df.dropna()
-
-###########3
+full_future_games = future_games.merge(future_games[rolling_cols + ["team_opp_next", "date_next", "team"]], left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
 
 
-future_preds = rr.predict(future_games_full_df[predictors])
-future_games_full_df["prediction"] = future_preds
+future_predicts = rr.predict(full_future_games[predictors])
+full_future_games["prediction"] = future_predicts
 
-print(future_games_full_df[["team", "team_opp_next", "date", "prediction"]])
+
+print(full_future_games[["team", "team_opp_next", "date", "prediction"]])
+
 
 
 
