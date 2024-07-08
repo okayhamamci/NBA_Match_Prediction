@@ -41,13 +41,6 @@ def find_averages(team):
     rolling = team[numeric_cols].rolling(5).mean() #Finding the average performance of the team by looking its previous "5" matches
     return rolling
 
-def shift_col(team, col_name):
-    next_col = team[col_name].shift(-1)
-    return next_col
-    
-def add_col(df, col_name):
-    return df.groupby("team", group_keys=False).apply(lambda x: shift_col(x, col_name))
-
 ############################################################################
 
 df = pandas.read_csv("nba_games.csv", index_col=0)
@@ -86,22 +79,45 @@ df_roll.columns = rolling_cols
 df = pandas.concat([df, df_roll], axis=1)
 df = df.dropna()
 
+# Directly shift columns and assign them
+df["home_next"] = df.groupby("team")["home"].shift(-1)
+df["team_opp_next"] = df.groupby("team")["team_opp"].shift(-1)
+df["date_next"] = df.groupby("team")["date"].shift(-1)
+
+full_df = df.merge(df[rolling_cols + ["team_opp_next", "date_next", "team"]], left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
+
 future_games_roll.columns = rolling_cols
 future_games = pandas.concat([future_games, future_games_roll], axis=1)
 future_games = future_games.dropna()
 
-df["home_next"] = add_col(df, "home")
-df["team_opp_next"] = add_col(df, "team_opp")
-df["date_next"] = add_col(df, "date")
+# Directly shift columns and assign them
+future_games["home_next"] = future_games.groupby("team")["home"].shift(-1)
+future_games["team_opp_next"] = future_games.groupby("team")["team_opp"].shift(-1)
+future_games["date_next"] = future_games.groupby("team")["date"].shift(-1)
 
-full_df = df.merge(df[rolling_cols + ["team_opp_next", "date_next", "team"]], left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
 
-print("BEFORE ADD COL")
-future_games["home_next"] = add_col(df, "home")
-future_games["team_opp_next"] = add_col(df, "team_opp")
-future_games["date_next"] = add_col(df, "date")
+print(future_games["home_next"])
+
+print("BEFORE MERGE")
+print(future_games.head())
+
+# Check unique values before merge
+print("Unique values in `team` before merge:")
+print(future_games["team"].unique())
+print("Unique values in `team_opp_next` before merge:")
+print(future_games["team_opp_next"].unique())
 
 full_future_games = future_games.merge(future_games[rolling_cols + ["team_opp_next", "date_next", "team"]], left_on=["team", "date_next"], right_on=["team_opp_next", "date_next"])
+
+print("AFTER MERGE")
+print(full_future_games.head())
+print(full_future_games.shape)
+
+# Check unique values after merge
+print("Unique values in `team` after merge:")
+print(full_future_games["team"].unique())
+print("Unique values in `team_opp_next` after merge:")
+print(full_future_games["team_opp_next"].unique())
 
 removed_cols = list(full_df.columns[full_df.dtypes == "object"]) + removed_cols
 selected_cols = full_df.columns[~full_df.columns.isin(removed_cols)]
@@ -112,26 +128,22 @@ predictors = list(selected_cols[sfs.get_support()])
 predictions = back_test(full_df, rr, predictors)
 predictions = predictions[predictions["actual"] != 2]
 
-#acc = accuracy_score(predictions["actual"], predictions["prediction"])
-#print("Accuracy Score: " + str(acc))
+acc = accuracy_score(predictions["actual"], predictions["prediction"])
+print("Accuracy Score: " + str(acc))
 
+###############################################
+            #### FUTURE GAMES ####
 
-# Find rows with NaN values under predictors
-nan_rows = full_future_games[full_future_games[predictors].isna().any(axis=1)]
-print("Rows with NaN values under predictors:")
-print(nan_rows)
+future_games = pandas.concat([future_games, future_games_roll], axis=1)
+future_games = future_games.dropna()
 
-future_predicts = rr.predict(full_future_games[predictors])
-full_future_games["prediction"] = future_predicts
-print(full_future_games[["team", "team_opp_next", "date", "prediction"]])
+print("Full future games before prediction:")
+print(full_future_games.head())
+print(full_future_games.shape)
 
-
-
-
-
-
-
-
-
-    
-    
+if not full_future_games.empty:
+    future_predicts = rr.predict(full_future_games[predictors])
+    full_future_games["prediction"] = future_predicts
+    print(full_future_games[["team", "team_opp_next", "date", "prediction"]])
+else:
+    print("No future games available for prediction.")
